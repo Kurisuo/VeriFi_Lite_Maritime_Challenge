@@ -319,8 +319,12 @@ INDEX_HTML = """<!doctype html>
     btn.disabled = true;
     spin.classList.add("show");
     answer.classList.remove("show");
+    // Resolve /run relative to the page URL so it works both locally ("/run")
+    // and behind Maritime's gateway prefix ("/a/{agent-id}/run").
+    const runUrl = new URL("run",
+      location.href.endsWith("/") ? location.href : location.href + "/");
     try {
-      const r = await fetch("/run", {
+      const r = await fetch(runUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task }),
