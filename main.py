@@ -37,35 +37,101 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ----------------------------------------------------------------------------
-# Tiny embedded corpus. Finance/market-structure flavored, echoing VeriFi's
+# Embedded corpus. Finance/market-structure flavored, echoing VeriFi's
 # domain (grounding LLM answers in regulatory/market documents).
-# Each entry: (source_id, text). Small on purpose -- this is a 1-hour demo.
+# Each entry: (source_id, text). Large enough that retrieval has to
+# discriminate between overlapping topics, small enough to embed in one call.
 # ----------------------------------------------------------------------------
 CORPUS = [
     ("mkt-001",
      "A limit order is an instruction to buy or sell a security at a specified "
      "price or better. A buy limit order executes at the limit price or lower; "
-     "a sell limit order executes at the limit price or higher."),
+     "a sell limit order executes at the limit price or higher. Unfilled limit "
+     "orders rest in the order book and supply liquidity to other traders."),
     ("mkt-002",
      "Price-time priority means resting orders are matched first by best price, "
      "then by arrival time among orders at the same price. It is the standard "
-     "matching rule in most electronic limit order books."),
+     "matching rule in most electronic limit order books, and it rewards both "
+     "aggressive pricing and being early in the queue."),
     ("mkt-003",
      "Slippage is the difference between the expected price of a trade and the "
      "price at which it actually executes. It is most severe in thin or fast "
-     "markets, such as during a flash crash."),
+     "markets, such as during a flash crash, and grows with order size because "
+     "larger orders consume deeper, worse-priced levels of the book."),
     ("mkt-004",
      "VWAP, the volume-weighted average price, is total traded value divided by "
      "total volume over a window. Large orders are often benchmarked against "
-     "VWAP because sweeping a thin book raises the blended average fill price."),
+     "VWAP because sweeping a thin book raises the blended average fill price. "
+     "Execution algorithms slice parent orders into child orders to track it."),
     ("mkt-005",
      "Regulation NMS requires trading centers to prevent trade-throughs: "
      "executions at prices worse than protected quotations displayed by other "
-     "venues, subject to defined exceptions."),
+     "venues, subject to defined exceptions. Its order protection rule ties "
+     "United States equity venues into one national market system."),
     ("mkt-006",
      "A retrieval-augmented generation (RAG) system grounds a language model's "
      "answer in retrieved source passages, reducing hallucination by making the "
      "model cite documents rather than rely on parametric memory alone."),
+    ("mkt-007",
+     "A market order executes immediately at the best available price, taking "
+     "liquidity from the book. It guarantees execution but not price, so in a "
+     "thin book a large market order can walk through multiple price levels "
+     "and suffer substantial slippage."),
+    ("mkt-008",
+     "The bid-ask spread is the gap between the highest resting buy price and "
+     "the lowest resting sell price. It compensates liquidity providers for "
+     "adverse selection and inventory risk; tighter spreads generally indicate "
+     "a more liquid, more competitive market."),
+    ("mkt-009",
+     "Market makers quote both a bid and an ask, earning the spread in exchange "
+     "for continuously supplying liquidity. They manage inventory risk by "
+     "skewing quotes, hedging, and widening spreads when volatility rises or "
+     "when they suspect they are trading against better-informed flow."),
+    ("mkt-010",
+     "Order book depth is the quantity of resting orders at each price level. "
+     "A deep book absorbs large orders with little price impact; a shallow or "
+     "thin book means even moderate orders move the price. Displayed depth can "
+     "understate true liquidity because of hidden and iceberg orders."),
+    ("mkt-011",
+     "An iceberg order displays only a small visible portion of its total size, "
+     "automatically replenishing the shown quantity as it fills. Traders use "
+     "icebergs to work large orders without revealing their full intent, at "
+     "the cost of losing time priority on each replenished slice."),
+    ("mkt-012",
+     "A stop order becomes a market order once the stop price is touched, and "
+     "a stop-limit order becomes a limit order instead. Stops are used to cap "
+     "losses, but in a gapping market a plain stop can fill far from the stop "
+     "price, and clustered stops can accelerate a price move."),
+    ("mkt-013",
+     "Circuit breakers halt trading after extreme moves: market-wide halts "
+     "trigger at 7, 13, and 20 percent declines in the S&P 500, and the "
+     "limit-up limit-down mechanism pauses individual stocks that move outside "
+     "dynamic price bands. Halts give liquidity time to return to the book."),
+    ("mkt-014",
+     "A dark pool is a trading venue that displays no pre-trade quotes. "
+     "Institutions use dark pools to cross large blocks with less market "
+     "impact and information leakage, typically at prices referenced from lit "
+     "exchanges such as the midpoint of the national best bid and offer."),
+    ("mkt-015",
+     "Adverse selection is the risk of trading against a counterparty with "
+     "better information. For liquidity providers it shows up as fills that "
+     "systematically precede price moves against them, which is why quoted "
+     "spreads widen when informed trading is likely."),
+    ("mkt-016",
+     "Latency arbitrage exploits speed differences to trade on stale quotes "
+     "before slower participants can update them. High-frequency trading firms "
+     "invest in colocation and microwave links; venues respond with speed "
+     "bumps, batch auctions, and randomized delays."),
+    ("mkt-017",
+     "Payment for order flow is compensation a broker receives for routing "
+     "retail orders to a wholesaler for execution. Wholesalers profit because "
+     "retail flow is mostly uninformed; critics argue the practice creates "
+     "conflicts with best execution, defenders point to price improvement."),
+    ("mkt-018",
+     "Opening and closing auctions batch orders and execute them at a single "
+     "clearing price that maximizes matched volume. The closing auction sets "
+     "the official closing price and attracts index funds, which is why it is "
+     "often the largest single liquidity event of the trading day."),
 ]
 
 EMBED_MODEL = "text-embedding-3-small"
@@ -283,14 +349,15 @@ INDEX_HTML = """<!doctype html>
 
   <div class="card">
     <div class="row">
-      <textarea id="q" placeholder="Ask about limit orders, slippage, VWAP, price-time priority, Reg NMS, or RAG itself&hellip;"></textarea>
+      <textarea id="q" placeholder="Ask about order types, slippage, market makers, dark pools, circuit breakers, auctions, HFT, Reg NMS&hellip;"></textarea>
       <button id="ask">Ask</button>
     </div>
     <div class="examples">
       <span class="chip">Why can a large limit order in a thin book fill worse than expected?</span>
-      <span class="chip">What is price-time priority?</span>
-      <span class="chip">How does RAG reduce hallucination?</span>
-      <span class="chip">What does Regulation NMS require?</span>
+      <span class="chip">Why do institutions trade in dark pools?</span>
+      <span class="chip">How do market makers protect themselves from informed traders?</span>
+      <span class="chip">What happens when a circuit breaker trips?</span>
+      <span class="chip">Why can a stop order fill far from its stop price?</span>
     </div>
     <div class="spinner" id="spin"></div>
     <div class="answer" id="answer">
