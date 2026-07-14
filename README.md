@@ -47,30 +47,12 @@ maritime create verifi-lite \
   --branch main --public --port 8080
 ```
 
-The challenge's LLM-token credit currently causes Maritime to inject
-`OPENAI_API_KEY` and `OPENAI_BASE_URL` at runtime. If those variables are not
-provided for your account, set `OPENAI_API_KEY` as a secret in Maritime's
-dashboard. Never put a key in this repository or in a recorded terminal
-command. After recording the demo:
+No credentials or secrets are committed to this repository. After using the
+agent:
 
 ```bash
 maritime sleep verifi-lite
 ```
-
-## 60-second video script
-
-1. **0:00-0:08** — "This is VeriFi-Lite, a small RAG agent inspired by, but
-   rebuilt separately from, my team's in-progress VeriFi vector store."
-2. **0:08-0:18** — Show the public GitHub repo: six embedded passages, exact
-   cosine retrieval, and source-constrained prompting.
-3. **0:18-0:28** — Show the Maritime dashboard with `verifi-lite`, its public
-   URL, and the agent status.
-4. **0:28-0:38** — Call `/health` and show `{"status":"ok"}`.
-5. **0:38-0:53** — POST the thin-book question to `/run`; highlight
-   `mode: "rag"` and citations such as `[mkt-003]` and `[mkt-004]`.
-6. **0:53-1:00** — "It sleeps when idle and wakes on a request, matching this
-   query-triggered RAG workload." Show the Maritime-hosted URL and state the
-   email used to register.
 
 ## Platform feedback
 
