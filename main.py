@@ -174,5 +174,6 @@ def run(body: Task):
 
 if __name__ == "__main__":
     import uvicorn
-    # Port 8080 per the Maritime LangGraph template spec.
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    # Maritime injects PORT for custom-repo deployments; 8080 remains the
+    # documented LangGraph-compatible default for local runs.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
