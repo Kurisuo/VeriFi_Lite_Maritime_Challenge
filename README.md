@@ -47,8 +47,11 @@ maritime create verifi-lite \
   --branch main --public --port 8080
 ```
 
-Set `OPENAI_API_KEY` as a secret in Maritime's dashboard. Never put the key in
-this repository or in a recorded terminal command. After recording the demo:
+The challenge's LLM-token credit currently causes Maritime to inject
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` at runtime. If those variables are not
+provided for your account, set `OPENAI_API_KEY` as a secret in Maritime's
+dashboard. Never put a key in this repository or in a recorded terminal
+command. After recording the demo:
 
 ```bash
 maritime sleep verifi-lite
@@ -76,3 +79,10 @@ maritime sleep verifi-lite
   docs URL returned 404.
 - The custom-repo requirement for a `Dockerfile` is clear in the current
   quickstart, but differs from older template-based guidance.
+- The first deployment built successfully but became `active` while its public
+  URL returned HTTP 502, with `All connection attempts failed` from
+  `fc-manager`.
+- Recreating the dead-on-arrival agent reused the deleted agent's packaged
+  rootfs tag, then failed with `pull access denied` for the new tag. Changing
+  the image identity bypassed that cache issue, but the fresh micro-VM still
+  failed before its exec server or application became reachable.
