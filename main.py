@@ -16,7 +16,7 @@ https://maritime.sh/docs/frameworks/langgraph :
 
 Flow per request (the RAG loop):
   1. Embed the incoming question            (OpenAI text-embedding-3-small)
-  2. Cosine-similarity top-k over the corpus (NumPy, exact search --
+  2. Cosine-similarity top-k over the corpus (pure Python, exact search --
      the same exact-kNN-first philosophy as VeriFi)
   3. Ask the LLM to answer ONLY from the retrieved chunks, with citations
   4. Return the grounded answer + which sources were used
