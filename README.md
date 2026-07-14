@@ -20,8 +20,9 @@ should not be described as "VeriFi deployed."
 
 ## Run locally
 
+Standard library only -- no dependencies to install:
+
 ```bash
-python -m pip install -r requirements.txt
 python main.py
 ```
 
@@ -68,3 +69,11 @@ maritime sleep verifi-lite
   rootfs tag, then failed with `pull access denied` for the new tag. Changing
   the image identity bypassed that cache issue, but the fresh micro-VM still
   failed before its exec server or application became reachable.
+- The rootfs cache appears to be keyed on image content: a byte-identical
+  rebuild for a brand-new agent reused the deleted agent's rootfs under the
+  old tag and then failed to pull the new tag. Any Dockerfile change breaks
+  the collision.
+- Maritime's own `maritime-hello-web` sample (stdlib-only, no pip layer)
+  deployed and served fine on the same account, so the app was rewritten to
+  the same shape: standard library HTTP server, no dependencies, calling the
+  injected `OPENAI_BASE_URL` proxy over raw HTTPS.

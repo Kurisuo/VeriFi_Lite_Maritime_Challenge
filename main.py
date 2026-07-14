@@ -5,33 +5,35 @@ A lightweight, serverless-friendly take on the grounded-retrieval idea behind
 VeriFi (my team's in-progress C++ vector store) -- rebuilt fresh in Python to
 fit Maritime's message-triggered, sleep/wake deployment model.
 
-HTTP contract follows Maritime's LangGraph template exactly, per
-https://maritime.sh/docs/frameworks/langgraph :
-  - FastAPI server on port 8080
+HTTP contract (mirrors Maritime's documented /health + /run agent shape):
+  - HTTP server on the Maritime-injected PORT (default 8080 locally)
   - GET  /health -> {"status": "ok"}
-  - POST /run    -> {"task": "..."} -> {"result": "..."}
-  - OPENAI_API_KEY provided via Maritime environment variables
-    (set with `maritime env set OPENAI_API_KEY=sk-...`, per
-     https://maritime.sh/blog/deploying-crewai-agents-to-production)
+  - POST /run    -> {"task": "..."} -> {"result": "...", "sources": [...], "mode": "..."}
+
+Implementation notes:
+  - Python standard library ONLY (http.server + urllib). No pip dependencies.
+    This matches Maritime's own custom-repo sample (maritime-hello-web), which
+    is the reference image proven to boot on their Firecracker micro-VMs.
+  - OpenAI is called over raw HTTPS. Maritime injects OPENAI_API_KEY and
+    OPENAI_BASE_URL at runtime (their managed LLM proxy); both are honored.
+  - Graceful degradation: without OPENAI_API_KEY, /run falls back to keyword
+    retrieval and returns the raw top chunks, so the deployment is
+    demonstrably alive even before secrets are configured.
 
 Flow per request (the RAG loop):
-  1. Embed the incoming question            (OpenAI text-embedding-3-small)
+  1. Embed the incoming question            (text-embedding-3-small)
   2. Cosine-similarity top-k over the corpus (pure Python, exact search --
      the same exact-kNN-first philosophy as VeriFi)
   3. Ask the LLM to answer ONLY from the retrieved chunks, with citations
   4. Return the grounded answer + which sources were used
-
-Graceful degradation: if OPENAI_API_KEY is missing, /run still works --
-it falls back to keyword retrieval and returns the raw top chunks, so the
-deployment is demonstrably alive even before secrets are configured.
 """
 
-import os
+import json
 import math
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-app = FastAPI(title="VeriFi-Lite", version="0.1.0")
+import os
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ----------------------------------------------------------------------------
 # Tiny embedded corpus. Finance/market-structure flavored, echoing VeriFi's
@@ -65,22 +67,33 @@ CORPUS = [
      "model cite documents rather than rely on parametric memory alone."),
 ]
 
-# ----------------------------------------------------------------------------
-# Embedding + retrieval
-# ----------------------------------------------------------------------------
 EMBED_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini"
 _corpus_vecs = None  # lazily computed once per wake, then cached in memory
 
 
-def _client():
-    from openai import OpenAI  # imported lazily so /health works keyless
-    return OpenAI()  # reads OPENAI_API_KEY from env (Maritime-injected)
+# ----------------------------------------------------------------------------
+# OpenAI over raw HTTPS (stdlib only). Maritime injects OPENAI_API_KEY and
+# OPENAI_BASE_URL (its managed proxy); default to the public endpoint locally.
+# ----------------------------------------------------------------------------
+def _openai_post(path: str, payload: dict) -> dict:
+    base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    req = urllib.request.Request(
+        f"{base}{path}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    resp = _client().embeddings.create(model=EMBED_MODEL, input=texts)
-    return [d.embedding for d in resp.data]
+    resp = _openai_post("/embeddings", {"model": EMBED_MODEL, "input": texts})
+    return [d["embedding"] for d in resp["data"]]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -123,39 +136,33 @@ def _answer(question: str, hits) -> str:
         "If the sources do not contain the answer, say so plainly.\n\n"
         f"Sources:\n{context}\n\nQuestion: {question}"
     )
-    resp = _client().chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
-    )
-    return resp.choices[0].message.content
+    resp = _openai_post("/chat/completions", {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 300,
+    })
+    return resp["choices"][0]["message"]["content"]
 
 
-# ----------------------------------------------------------------------------
-# Maritime LangGraph-template HTTP contract
-# (port 8080, /health, /run {"task"} -> {"result"})
-# per https://maritime.sh/docs/frameworks/langgraph
-# ----------------------------------------------------------------------------
-
-class Task(BaseModel):
-    task: str
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/run")
-def run(body: Task):
-    question = body.task.strip()
+def run_task(question: str) -> dict:
+    question = question.strip()
     if not question:
         return {"result": "Send a question in the 'task' field."}
 
     if os.environ.get("OPENAI_API_KEY"):
-        hits = _retrieve(question)
-        answer = _answer(question, hits)
-        mode = "rag"
+        try:
+            hits = _retrieve(question)
+            answer = _answer(question, hits)
+            mode = "rag"
+        except (urllib.error.URLError, KeyError, OSError) as exc:
+            # LLM backend unavailable: stay demoable instead of 500ing.
+            hits = _keyword_fallback(question)
+            answer = (
+                f"LLM call failed ({exc}); returning raw top-matching sources "
+                "(keyword mode):\n\n"
+                + "\n\n".join(f"[{sid}] {text}" for _, sid, text in hits)
+            )
+            mode = "keyword-fallback"
     else:
         hits = _keyword_fallback(question)
         answer = (
@@ -172,8 +179,42 @@ def run(body: Task):
     }
 
 
+# ----------------------------------------------------------------------------
+# HTTP server (stdlib): /health and /run on the Maritime-injected PORT.
+# ----------------------------------------------------------------------------
+class Handler(BaseHTTPRequestHandler):
+    def _send_json(self, code: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.rstrip("/") in ("", "/health".rstrip("/")) or self.path == "/health":
+            self._send_json(200, {"status": "ok"})
+        else:
+            self._send_json(404, {"detail": "Not found. Try GET /health or POST /run."})
+
+    def do_POST(self):
+        if self.path != "/run":
+            self._send_json(404, {"detail": "Not found. Try POST /run."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            task = str(body.get("task", ""))
+        except (ValueError, json.JSONDecodeError):
+            self._send_json(400, {"detail": "Body must be JSON: {\"task\": \"...\"}"})
+            return
+        self._send_json(200, run_task(task))
+
+    def log_message(self, format, *args):  # noqa: A002 -- stdlib signature
+        pass  # keep container logs quiet
+
+
 if __name__ == "__main__":
-    import uvicorn
-    # Maritime injects PORT for custom-repo deployments; 8080 remains the
-    # documented LangGraph-compatible default for local runs.
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    # Maritime injects PORT for custom-repo deployments; 8080 is the local default.
+    port = int(os.environ.get("PORT", "8080"))
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
