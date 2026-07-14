@@ -12,6 +12,7 @@ should not be described as "VeriFi deployed."
 
 ## API
 
+- `GET /` serves a browser UI for asking questions (the demo frontend).
 - `GET /health` returns `{"status":"ok"}`.
 - `POST /run` accepts `{"task":"..."}`.
 - With `OPENAI_API_KEY`, `/run` returns a grounded answer with `mode: "rag"`.
